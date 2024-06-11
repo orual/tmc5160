@@ -3,3 +3,5 @@
 Cargo.lock
 .gdb_history
 .idea/*
+.direnv
+.devenv
