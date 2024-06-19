@@ -12,11 +12,9 @@
 use core::fmt;
 use core::result::Result;
 
-use embedded_hal::digital::OutputPin;
-
 
 use embedded_hal_async::spi::{SpiDevice, Mode, Phase, Polarity};
-
+use fixed::{types::extra::U16, FixedI64};
 use crate::registers::*;
 
 pub mod registers;
@@ -60,10 +58,10 @@ impl fmt::Display for DataPacket {
     }
 }
 
+
 /// TMC5160 driver
-pub struct Tmc5160<SPIDEV, EN> {
+pub struct Tmc5160<SPIDEV> {
     spi: SPIDEV,
-    en: Option<EN>,
     /// the max velocity that is set
     pub v_max: f32,
     /// status register of the driver
@@ -71,7 +69,8 @@ pub struct Tmc5160<SPIDEV, EN> {
     /// debug info of the last transmission
     pub debug: [u8; 5],
     _clock: f32,
-    _step_count: f32,
+    /// number of steps per revolution
+    pub _step_count: f32,
     _en_inverted: bool,
     /// value of the GCONF register
     pub g_conf: GConf,
@@ -99,16 +98,20 @@ pub struct Tmc5160<SPIDEV, EN> {
     pub pwm_conf: PwmConf,
 }
 
-impl<SPIDEV, EN, E> Tmc5160<SPIDEV, EN>
+impl <SPIDEV> fmt::Debug for Tmc5160<SPIDEV> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "TMC5160")
+    }
+}
+
+impl<SPIDEV, E> Tmc5160<SPIDEV>
     where
         SPIDEV: SpiDevice<Error = E>,
-        EN: OutputPin,
 {
     /// Create a new driver from a SPI peripheral and a NCS pin
     pub fn new(spi: SPIDEV) -> Self {
         Tmc5160 {
             spi,
-            en: None,
             v_max: 0.0,
             status: SpiStatus::new(),
             debug: [0; 5],
@@ -130,18 +133,6 @@ impl<SPIDEV, EN, E> Tmc5160<SPIDEV, EN>
         }
     }
 
-    /// attach an enable pin to the driver
-    pub fn attach_en(mut self, en: EN) -> Self {
-        self.en = Some(en);
-        self
-    }
-
-    /// invert the enable pin
-    pub fn en_inverted(mut self, inv: bool) -> Self {
-        self._en_inverted = inv;
-        self
-    }
-
     /// specify clock speed of the Tmc5160 (Default is 12 MHz)
     pub fn clock(mut self, clock: f32) -> Self {
         self._clock = clock;
@@ -155,14 +146,33 @@ impl<SPIDEV, EN, E> Tmc5160<SPIDEV, EN>
     }
 
     fn speed_from_hz(&mut self, speed_hz: f32) -> u32 {
-        return (speed_hz / (self._clock / 16_777_216.0) * self._step_count) as u32;
+        (speed_hz / (self._clock / 16_777_216.0) * self._step_count) as u32
     }
 
     fn accel_from_hz(&mut self, accel_hz_per_s: f32) -> u32 {
-        return (accel_hz_per_s / (self._clock * self._clock)
+        (accel_hz_per_s / (self._clock * self._clock)
             * (512.0 * 256.0)
             * 16_777_216.0
-            * self._step_count) as u32;
+            * self._step_count) as u32
+    }
+
+
+    /// Convert revolutions to microsteps
+    pub fn convert_revs_to_microsteps(&self, revs: FixedI64<U16>) -> Option<i32> {
+        let esteps_per_rev = FixedI64::<U16>::from_num(self._step_count);
+        let microsteps = revs * esteps_per_rev;
+        if microsteps > i32::MAX as i64 {
+            None
+        } else {
+            let microsteps: i32 = microsteps.to_num();
+            Some(microsteps)
+        }
+    }
+
+    /// Convert revolutions to microsteps
+    pub fn convert_microsteps_to_revs(&self, steps: i32) -> FixedI64<U16> {
+        let esteps_per_rev = FixedI64::<U16>::from_num(self._step_count);
+        FixedI64::<U16>::from_num(steps) / esteps_per_rev
     }
 
     /// read a specified register
@@ -243,6 +253,7 @@ impl<SPIDEV, EN, E> Tmc5160<SPIDEV, EN>
                 //usb_println(arrform!(64,"read answer {:?}",r).as_str());
             }
             (Err(_err), _) => {
+
                 //usb_println(arrform!(64, "spi failed to read = {:?}", err).as_str());
             }
         }
@@ -281,32 +292,6 @@ impl<SPIDEV, EN, E> Tmc5160<SPIDEV, EN>
             }
         }
         status_byte
-    }
-
-    /// enable the motor if the EN pin was specified
-    pub fn enable(&mut self) -> Result<(), Error<E>> {
-        if let Some(pin) = &mut self.en {
-            if self._en_inverted {
-                pin.set_high().map_err(|_| Error::PinError)
-            } else {
-                pin.set_low().map_err(|_| Error::PinError)
-            }
-        } else {
-            Ok(())
-        }
-    }
-
-    /// disable the motor if the EN pin was specified
-    pub fn disable(&mut self) -> Result<(), Error<E>> {
-        if let Some(pin) = &mut self.en {
-            if self._en_inverted {
-                pin.set_low().map_err(|_| Error::PinError)
-            } else {
-                pin.set_high().map_err(|_| Error::PinError)
-            }
-        } else {
-            Ok(())
-        }
     }
 
     /// clear G_STAT register
@@ -495,6 +480,19 @@ impl<SPIDEV, EN, E> Tmc5160<SPIDEV, EN>
         Ok(EncStatus::from_bytes(packet.data.to_le_bytes()))
     }
 
+    /// read encoder position
+    pub async fn read_enc_pos(&mut self) -> Result<i32, Error<E>> {
+        self.read_register(Registers::X_ENC).await.map(|packet| packet.data as i32)
+    }
+
+    /// read encoder position
+    pub async fn home_enc(&mut self) -> Result<DataPacket, Error<E>> {
+        let mut val = 0_u32.to_be_bytes();
+        let packet = self.write_register(Registers::X_ENC, &mut val).await?;
+        self.status = packet.status;
+        Ok(packet)
+    }
+
     /// set the position to 0 / home
     pub async fn set_home(&mut self) -> Result<DataPacket, Error<E>> {
         let mut val = 0_u32.to_be_bytes();
@@ -506,13 +504,21 @@ impl<SPIDEV, EN, E> Tmc5160<SPIDEV, EN>
 
     /// stop the motor now
     pub async fn stop(&mut self) -> Result<DataPacket, Error<E>> {
-        self.disable()?;
+        //self.disable()?;
         let mut val = 0_u32.to_be_bytes();
         self.write_register(Registers::VSTART, &mut val).await?;
         self.write_register(Registers::VMAX, &mut val).await?;
         // TODO: check how we can restart the movement afterwards
         let mut position = self.get_position().await?.to_be_bytes();
         let packet = self.write_register(Registers::XTARGET, &mut position).await?;
+        self.status = packet.status;
+        Ok(packet)
+    }
+
+    /// pauses the motion by writing 0 to VMAX
+    pub async fn pause(&mut self) -> Result<DataPacket, Error<E>> {
+        let mut val = 0_u32.to_be_bytes();
+        let packet = self.write_register(Registers::VMAX, &mut val).await?;
         self.status = packet.status;
         Ok(packet)
     }
@@ -575,8 +581,18 @@ impl<SPIDEV, EN, E> Tmc5160<SPIDEV, EN>
 
     /// move to a specific location
     pub async fn move_to(&mut self, target: f32) -> Result<DataPacket, Error<E>> {
-        self.enable()?;
+        //self.enable()?;
         let target = (target * self._step_count) as i32;
+        let mut val = target.to_be_bytes();
+        let packet = self.write_register(Registers::XTARGET, &mut val).await?;
+        self.status = packet.status;
+        Ok(packet)
+    }
+
+    /// move to a specific location by microsteps
+    pub async fn move_to_steps(&mut self, target: i32) -> Result<DataPacket, Error<E>> {
+        //self.enable()?;
+        let target = (target) as i32;
         let mut val = target.to_be_bytes();
         let packet = self.write_register(Registers::XTARGET, &mut val).await?;
         self.status = packet.status;
@@ -593,6 +609,39 @@ impl<SPIDEV, EN, E> Tmc5160<SPIDEV, EN>
     pub async fn get_position(&mut self) -> Result<f32, Error<E>> {
         self.read_register(Registers::XACTUAL).await
         .map(|val| (val.data as i32) as f32 / self._step_count)
+    }
+
+    /// get encoder and motor position as a tuple
+    /// This function tries to do things in an optimized way, 
+    /// blocking the thread so that both values are read at nearly the same time
+    pub async fn get_position_enc(&mut self) -> Result<(i32, i32), Error<E>> {
+        let mut mot_buf = [Registers::XACTUAL.addr(), 0, 0, 0, 0];
+        let mut enc_buf = [Registers::X_ENC.addr(), 0, 0, 0, 0];
+
+        let mut motor_resp: [u8; 5] = [0; 5];
+        let mut enc_resp: [u8; 5] = [0; 5];
+        
+        embassy_futures::block_on(async {
+            self.spi.transfer(&mut motor_resp, &mut mot_buf).await.map_err(Error::Spi)?;
+            self.spi.transfer(&mut enc_resp, &mut enc_buf).await.map_err(Error::Spi)
+        })?;
+
+        let mut motor_val: [u8; 4] = [0; 4];
+        let mut enc_val: [u8; 4] = [0; 4];
+        for i in 0..4 {
+            motor_val[i] = motor_resp[i + 1];
+            enc_val[i] = enc_resp[i + 1];
+        }
+        
+        let motor =  u32::from_be_bytes(motor_val);
+        let encoder =  u32::from_be_bytes(enc_val);
+        Ok(((motor as i32), (encoder as i32)))
+    }
+
+    /// get the current position in microsteps
+    pub async fn get_position_steps(&mut self) -> Result<i32, Error<E>> {
+        self.read_register(Registers::XACTUAL).await
+        .map(|val| val.data as i32)
     }
 
     /// set the current position
@@ -623,4 +672,11 @@ impl<SPIDEV, EN, E> Tmc5160<SPIDEV, EN>
         self.read_register(Registers::XTARGET).await
         .map(|packet| packet.data as f32 / self._step_count)
     }
+
+    /// get the current target position (XTARGET) in microsteps
+    pub async fn get_target_steps(&mut self) -> Result<i32, Error<E>> {
+        self.read_register(Registers::XTARGET).await
+        .map(|packet| packet.data as i32)
+    }
 }
+
