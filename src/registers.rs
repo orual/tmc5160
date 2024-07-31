@@ -288,7 +288,7 @@ pub struct OtpRead {
 }
 
 /// SHORT_CONF
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
