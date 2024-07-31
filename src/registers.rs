@@ -151,7 +151,7 @@ impl Address for Registers {
 
 /// SPISTATUS
 #[allow(dead_code)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[bitfield(bits = 8)]
 #[derive(ToValue)]
 pub struct SpiStatus {
@@ -166,7 +166,7 @@ pub struct SpiStatus {
 }
 
 /// DRVSTATUS
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -217,7 +217,7 @@ pub struct GConf {
 }
 
 /// GSTAT Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -243,7 +243,7 @@ pub struct NodeConf {
 
 
 /// IOIN Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -262,7 +262,7 @@ pub struct IoIn {
 
 
 /// OTP_PROG Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -275,7 +275,7 @@ pub struct OtpProg {
 }
 
 /// OTPREAD
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -288,7 +288,7 @@ pub struct OtpRead {
 }
 
 /// SHORT_CONF
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -303,7 +303,7 @@ pub struct ShortConf {
 }
 
 /// DrvConfRegister
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -324,7 +324,7 @@ pub struct DrvConf {
 }
 
 /// OFFSET_READ
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield]
 pub struct OffsetRead {
@@ -334,7 +334,7 @@ pub struct OffsetRead {
 
 
 /// IHOLD_IRUN Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -353,6 +353,7 @@ pub struct IHoldIRun {
 
 /// RAMPMODE Register
 #[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
 pub enum RampMode {
     /// using all A, D and V parameters
     PositioningMode = 0x00,
@@ -366,7 +367,7 @@ pub enum RampMode {
 
 
 /// SW_MODE Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -388,7 +389,7 @@ pub struct SwMode {
 
 
 /// RAMOSTAT Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -412,7 +413,7 @@ pub struct RampStat {
 
 
 /// ENCMODE Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -432,7 +433,7 @@ pub struct EncMode {
 }
 
 /// ENC_STATUS Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -444,7 +445,7 @@ pub struct EncStatus {
 
 
 /// MSLUTSEL Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -459,7 +460,7 @@ pub struct MsLutSel {
 }
 
 /// CHOPFCONF Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -491,7 +492,7 @@ impl Default for ChopConf {
 
 
 /// COOLCONF Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
@@ -511,7 +512,7 @@ pub struct CoolConf {
 }
 
 /// PWMCONF Register
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 #[bitfield(bits = 32)]
 #[derive(ToValue)]
