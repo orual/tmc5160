@@ -503,18 +503,18 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
     }
 
     /// stop the motor now
-    pub async fn stop(&mut self) -> Result<(DataPacket, f32), Error<E>> {
+    pub async fn stop(&mut self) -> Result<DataPacket, Error<E>> {
         //self.disable()?;
         let mut val = 0_u32.to_be_bytes();
-        //self.write_register(Registers::VSTART, &mut val).await?;
-        let packet = self.write_register(Registers::VMAX, &mut val).await?;
+        self.write_register(Registers::VSTART, &mut val).await?;
+        self.write_register(Registers::VMAX, &mut val).await?;
         // TODO: check how we can restart the movement afterwards
-        //let mut position = self.get_position().await?.to_be_bytes();
-        //let packet = self.write_register(Registers::XTARGET, &mut position).await?;
-        let vmax = self.get_velocity_max();
+        let mut position = self.get_position().await?.to_be_bytes();
+        let packet = self.write_register(Registers::XTARGET, &mut position).await?;
+        let vmax = self.get_velocity();
         log::info!("VMAX: {}", vmax);
         self.status = packet.status;
-        Ok((packet, vmax))
+        Ok(packet)
     }
 
     /// pauses the motion by writing 0 to VMAX
