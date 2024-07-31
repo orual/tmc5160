@@ -508,10 +508,10 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
         //self.disable()?;
         let mut val = 0_u32.to_be_bytes();
         self.write_register(Registers::VSTART, &mut val).await?;
-        self.write_register(Registers::VMAX, &mut val).await?;
+        let packet = self.write_register(Registers::VMAX, &mut val).await?;
         // TODO: check how we can restart the movement afterwards
-        let mut position = self.get_position().await?.to_be_bytes();
-        let packet = self.write_register(Registers::XTARGET, &mut position).await?;
+        //let mut position = self.get_position().await?.to_be_bytes();
+        //let packet = self.write_register(Registers::XTARGET, &mut position).await?;
         self.status = packet.status;
         Ok(packet)
     }
