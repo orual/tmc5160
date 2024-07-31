@@ -42,7 +42,6 @@ pub enum Error<E> {
     PinError,
 }
 
-#[derive(Debug)]
 /// Data Exchange packet
 pub struct DataPacket {
     /// Status returned from last communication
