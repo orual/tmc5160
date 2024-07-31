@@ -511,7 +511,7 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
         // TODO: check how we can restart the movement afterwards
         let mut position = self.get_position().await?.to_be_bytes();
         let packet = self.write_register(Registers::XTARGET, &mut position).await?;
-        let vmax = self.get_velocity();
+        let vmax = self.get_velocity().await?;
         log::info!("VMAX: {}", vmax);
         self.status = packet.status;
         Ok(packet)
