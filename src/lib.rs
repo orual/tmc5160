@@ -161,7 +161,7 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
     pub fn convert_revs_to_microsteps(&self, revs: FixedI64<U16>) -> Option<i32> {
         let revs: f64 = revs.to_num();
         let microsteps = revs * self._step_count as f64;
-        if microsteps > i32::MAX as i64 {
+        if microsteps as i64 > i32::MAX as i64 {
             None
         } else {
             Some(microsteps as i32)
