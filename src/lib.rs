@@ -159,13 +159,12 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
 
     /// Convert revolutions to microsteps
     pub fn convert_revs_to_microsteps(&self, revs: FixedI64<U16>) -> Option<i32> {
-        let esteps_per_rev = FixedI64::<U16>::from_num(self._step_count);
-        let microsteps = revs * esteps_per_rev;
+        let revs: f64 = revs.to_num();
+        let microsteps = revs * self._step_count as f64;
         if microsteps > i32::MAX as i64 {
             None
         } else {
-            let microsteps: i32 = microsteps.to_num();
-            Some(microsteps)
+            Some(microsteps as i32)
         }
     }
 
