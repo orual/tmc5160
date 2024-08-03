@@ -14,7 +14,7 @@ use core::result::Result;
 
 
 use embedded_hal_async::spi::{SpiDevice, Mode, Phase, Polarity};
-use fixed::{types::extra::U16, FixedI64};
+use fixed::types::{I8F8, I48F16};
 use crate::registers::*;
 
 pub mod registers;
@@ -158,7 +158,7 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
 
 
     /// Convert revolutions to microsteps
-    pub fn convert_revs_to_microsteps(&self, revs: FixedI64<U16>) -> Option<i32> {
+    pub fn convert_revs_to_microsteps(&self, revs: I48F16) -> Option<i32> {
         let revs: f64 = revs.to_num();
         let microsteps = revs * self._step_count as f64;
         if microsteps as i64 > i32::MAX as i64 {
@@ -169,9 +169,9 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
     }
 
     /// Convert revolutions to microsteps
-    pub fn convert_microsteps_to_revs(&self, steps: i32) -> FixedI64<U16> {
-        let esteps_per_rev = FixedI64::<U16>::from_num(self._step_count);
-        FixedI64::<U16>::from_num(steps) / esteps_per_rev
+    pub fn convert_microsteps_to_revs(&self, steps: i32) -> I48F16 {
+        let esteps_per_rev = I48F16::from_num(self._step_count);
+        I48F16::from_num(steps) / esteps_per_rev
     }
 
     /// read a specified register
@@ -678,6 +678,33 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
     pub async fn get_target_steps(&mut self) -> Result<i32, Error<E>> {
         self.read_register(Registers::XTARGET).await
         .map(|packet| packet.data as i32)
+    }
+    /// relative positional movement
+    pub async fn move_to_relative(&mut self, speed: f32, microsteps: i32) -> Result<(), Error<E>>  {
+        self.set_rampmode(RampMode::PositioningMode).await?;
+        self.set_velocity(speed).await?;
+        self.set_home().await?;
+        self.home_enc().await?;
+        self.move_to_steps(microsteps).await?;
+        Ok(())
+    }
+    /// directional velocity movement
+    pub async fn move_velocity(&mut self, velocity: I8F8 ) -> Result<(), Error<E>>  {
+        if velocity < 0 {
+            self.set_rampmode(RampMode::VelocityModeNeg).await?;
+        } else {
+            self.set_rampmode(RampMode::VelocityModePos).await?;
+        }
+        self.set_velocity(velocity.abs().to_num()).await?;
+        Ok(())
+    }
+
+    /// Wait for the motor to reach the target speed
+    pub async fn wait_for_velocity(&mut self, delay_ms: u64) -> Result<(), Error<E>> {
+        while !self.velocity_is_reached().await? {
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(delay_ms)).await;
+        }
+        Ok(())
     }
 }
 
