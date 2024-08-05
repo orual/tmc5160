@@ -665,52 +665,58 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
         if mode != RampMode::PositioningMode as u32 {
             return Err(Error::PinError);
         }
-        let est_end = self.calculate_finish().await;
+        let est_end = self.calculate_finish().await?;
         embassy_time::Timer::after(est_end).await;
         while !self.position_is_reached().await? {
             embassy_time::Timer::after(Duration::from_micros(50)).await;
         }
         Ok(())
     }
-
-    pub async fn calculate_finish(&mut self) -> Duration {
-        let status = self.read_ramp_status().await.unwrap();
+    /// Calculate the remaining time in a motion in positioning mode
+    pub async fn calculate_finish(&mut self) -> Result<Duration, Error<E>> {
+        let status = self.read_ramp_status().await?;
         if status.position_reached() {
-            return Duration::from_millis(0);
+            return Ok(Duration::from_millis(0));
         }
         let position = self.get_position().await?;
-        let mut target = self.get_target().await?;
-        let mut distance = (target - position).abs();
-        let max_speed = self.get_velocity_max().abs();    
+        let target = self.get_target().await?;
+        let distance = abs(target - position);
+        let max_speed = abs(self.get_velocity_max());    
         if distance < 1.0 {
             // We underestimate the time by a bit here by not accounting for acceleration.
             // This is fine, saves a bunch of register reads & math and is good enough for most cases.
             // Similarly, we ignore the possibility of the motor being in the deceleration phase, because
             // it's hard to know for sure, and this case here covers it for 99% of all scenarios.
             let millis = max_speed * 1000.0 * distance;
-            return Duration::from_millis(millis as u64);
+            return Ok(Duration::from_millis(millis as u64));
         }
-
-        let v1 = self.speed_to_hz(self.read_register(Registers::V1).await.unwrap().data);
+        let v1 = self.read_register(Registers::V1).await?.data;
+        let v1 = self.speed_to_hz(v1);
         let (speed, phase) = if status.vzero() {
             (0.0 , MovePhase::Stopped)
         } else if status.velocity_reached() {
             (max_speed, MovePhase::VMax)
         } else {
-            let s = self.get_velocity().await.unwrap().abs();
+            let s = abs(self.get_velocity().await?);
             if s < v1 {
                 (s, MovePhase::AStart)
             } else {
                 (s, MovePhase::A2Max)
             }
         };
-        let v_start = self.speed_to_hz(self.read_register(Registers::VSTART).await.unwrap().data);
-        let v_stop = self.speed_to_hz(self.read_register(Registers::VSTOP).await.unwrap().data);
+        let v_start = self.read_register(Registers::VSTART).await?.data;
+        let v_start = self.speed_to_hz(v_start);
+        let v_stop = self.read_register(Registers::VSTOP).await?.data;
+        let v_stop = self.speed_to_hz(v_stop);
         
-        let a_1 = self.accel_to_hz(self.read_register(Registers::A1).await.unwrap().data);
-        let d_1 = self.accel_to_hz(self.read_register(Registers::D1).await.unwrap().data);
-        let d_max = self.accel_to_hz(self.read_register(Registers::DMAX).await.unwrap().data);
-        let a_max = self.accel_to_hz(self.read_register(Registers::AMAX).await.unwrap().data);
+        let a_1 = self.read_register(registers::Registers::A1).await?.data;
+        let a_1 = self.accel_to_hz(a_1);
+        let d_1 = self.read_register(Registers::D1).await?.data;
+        let d_1 = self.accel_to_hz(d_1);
+        let d_max = self.read_register(registers::Registers::DMAX).await?.data;
+        let d_max = self.accel_to_hz(d_max);
+        let a_max = self.read_register(registers::Registers::AMAX).await?.data;
+        let a_max = self.accel_to_hz(a_max);
 
         let t_accel = (max_speed - v_start) / a_1;
         let d_accel = (v1 * v1 - v_start * v_start) / (2.0 * a_1);
@@ -720,17 +726,17 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
         let d_d_max = (max_speed * max_speed - v1 * v1) / (2.0 * d_max);
         let t_a_max = (max_speed - v1) / a_max;
         let t_d_max = (max_speed - v1) / d_max;
-        let d_const = distance - match phase {
-            MovePhase::Stopped => (d_accel + d_decel + d_a_max + d_d_max),
+        let d_const = match phase {
+            MovePhase::Stopped => distance - (d_accel + d_decel + d_a_max + d_d_max),
             MovePhase::AStart => {
                 let d = d_accel - (speed * speed - v_start * v_start) / (2.0 * a_1);
-                (d + d_decel + d_d_max + d_a_max)
+                distance - (d + d_decel + d_d_max + d_a_max)
             },
             MovePhase::A2Max => {
                 let d = d_a_max - (speed * speed - v1 * v1) / (2.0 * a_max);
-                (d + d_decel + d_d_max)
+                distance - (d + d_decel + d_d_max)
             },
-            MovePhase::VMax => (d_decel + d_d_max),
+            MovePhase::VMax => distance - (d_decel + d_d_max),
         };
         let t_const = d_const / max_speed;
         let t_total = t_const + match phase {
@@ -749,7 +755,7 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
         // This is also a slight underestimate, because the motor doesn't ACTUALLY
         // accelerate from 0 to V_START in 0 time, but it's good enough,
         // and we WANT to underestimate rather than overestimate.
-        Duration::from_micros(micros as u64)
+        Ok(Duration::from_micros(micros as u64))
     }
 }
 
@@ -761,3 +767,11 @@ enum MovePhase {
     A2Max,
     VMax,
 }
+
+fn abs(x: f32) -> f32 {
+    if x < 0.0 {
+        -x
+    } else {
+        x
+    }
+}   
