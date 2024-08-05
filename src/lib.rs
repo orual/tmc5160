@@ -13,6 +13,7 @@ use core::fmt;
 use core::result::Result;
 
 
+use embassy_time::Duration;
 use embedded_hal_async::spi::{SpiDevice, Mode, Phase, Polarity};
 use fixed::types::{I8F8, I48F16};
 use crate::registers::*;
@@ -149,11 +150,21 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
         (speed_hz / (self._clock / 16_777_216.0) * self._step_count) as u32
     }
 
+    fn speed_to_hz(&mut self, speed: u32) -> f32 {
+        (speed as f32 / self._step_count) * (self._clock / 16_777_216.0)
+    }
+
     fn accel_from_hz(&mut self, accel_hz_per_s: f32) -> u32 {
         (accel_hz_per_s / (self._clock * self._clock)
             * (512.0 * 256.0)
             * 16_777_216.0
             * self._step_count) as u32
+    }
+
+    fn accel_to_hz(&mut self, accel: u32) -> f32 {
+        (accel as f32 / self._step_count) * (self._clock * self._clock)
+            / (512.0 * 256.0)
+            / 16_777_216.0
     }
 
 
@@ -234,63 +245,6 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
         }
 
         Ok(DataPacket { status: SpiStatus::from_bytes([response[0]]), data: u32::from_be_bytes(ret_val), debug: debug_val })
-    }
-
-    /// read a specified register according to the old implementation
-    pub async fn old_read_register(&mut self, register: u8, buffer: &mut [u8; 5]) {
-        let mut read_cmd = [register, 0x00, 0x00, 0x00, 0x00];
-        let mut response: [u8; 5] = [0; 5];
-
-        //usb_println(arrform!(64,"write buffer {:?}",read_cmd).as_str());
-        match (self.spi.transfer(&mut response, &mut read_cmd).await, response) {
-            (Ok(_), r) => {
-                buffer[0] = r[0];
-                buffer[1] = r[1];
-                buffer[2] = r[2];
-                buffer[3] = r[3];
-                buffer[4] = r[4];
-                //usb_println(arrform!(64,"read answer {:?}",r).as_str());
-            }
-            (Err(_err), _) => {
-
-                //usb_println(arrform!(64, "spi failed to read = {:?}", err).as_str());
-            }
-        }
-
-        let mut read_cmd = [register, 0x00, 0x00, 0x00, 0x00];
-
-        //usb_println(arrform!(64,"write buffer {:?}",read_cmd).as_str());
-        match (self.spi.transfer(&mut response, &mut read_cmd).await, response) {
-            (Ok(_), r) => {
-                buffer[0] = r[0];
-                buffer[1] = r[1];
-                buffer[2] = r[2];
-                buffer[3] = r[3];
-                buffer[4] = r[4];
-                //usb_println(arrform!(64,"read answer {:?}",r).as_str());
-            }
-            (Err(_err), _) => {
-                //usb_println(arrform!(64, "spi failed to read = {:?}", err).as_str());
-            }
-        }
-    }
-
-    /// write value to a specified register according to the old implementation
-    pub async fn old_write_register(&mut self, register: u8, payload: &[u8; 4]) -> u8 {
-        let mut status_byte = 0;
-        let mut buffer: [u8; 5] = [register | 0x80, payload[0], payload[1], payload[2], payload[3]];
-        let mut response: [u8; 5] = [0; 5];
-        // usb_println(arrform!(64,"write buffer {:?}",buffer).as_str());
-        match (self.spi.transfer(&mut response, &mut buffer).await, response) {
-            (Ok(_), r) => {
-                //usb_println(arrform!(64,"write answer {:?}",r).as_str());
-                status_byte = r[0];
-            }
-            (Err(_err), _) => {
-                //usb_println(arrform!(64, "spi failed to write = {:?}", err).as_str());
-            }
-        }
-        status_byte
     }
 
     /// clear G_STAT register
@@ -700,9 +654,110 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
     /// Wait for the motor to reach the target speed
     pub async fn wait_for_velocity(&mut self, delay_ms: u64) -> Result<(), Error<E>> {
         while !self.velocity_is_reached().await? {
-            embassy_time::Timer::after(embassy_time::Duration::from_millis(delay_ms)).await;
+            embassy_time::Timer::after(Duration::from_millis(delay_ms)).await;
         }
         Ok(())
     }
+
+    /// Wait for the motor to reach the target position
+    pub async fn wait_for_target(&mut self) -> Result<(), Error<E>> {
+        let mode = self.read_register(Registers::RAMPMODE).await?.data;
+        if mode != RampMode::PositioningMode as u32 {
+            return Err(Error::PinError);
+        }
+        let est_end = self.calculate_finish().await;
+        embassy_time::Timer::after(est_end).await;
+        while !self.position_is_reached().await? {
+            embassy_time::Timer::after(Duration::from_micros(50)).await;
+        }
+        Ok(())
+    }
+
+    pub async fn calculate_finish(&mut self) -> Duration {
+        let status = self.read_ramp_status().await.unwrap();
+        if status.position_reached() {
+            return Duration::from_millis(0);
+        }
+        let position = self.get_position().await?;
+        let mut target = self.get_target().await?;
+        let mut distance = (target - position).abs();
+        let max_speed = self.get_velocity_max().abs();    
+        if distance < 1.0 {
+            // We underestimate the time by a bit here by not accounting for acceleration.
+            // This is fine, saves a bunch of register reads & math and is good enough for most cases.
+            // Similarly, we ignore the possibility of the motor being in the deceleration phase, because
+            // it's hard to know for sure, and this case here covers it for 99% of all scenarios.
+            let millis = max_speed * 1000.0 * distance;
+            return Duration::from_millis(millis as u64);
+        }
+
+        let v1 = self.speed_to_hz(self.read_register(Registers::V1).await.unwrap().data);
+        let (speed, phase) = if status.vzero() {
+            (0.0 , MovePhase::Stopped)
+        } else if status.velocity_reached() {
+            (max_speed, MovePhase::VMax)
+        } else {
+            let s = self.get_velocity().await.unwrap().abs();
+            if s < v1 {
+                (s, MovePhase::AStart)
+            } else {
+                (s, MovePhase::A2Max)
+            }
+        };
+        let v_start = self.speed_to_hz(self.read_register(Registers::VSTART).await.unwrap().data);
+        let v_stop = self.speed_to_hz(self.read_register(Registers::VSTOP).await.unwrap().data);
+        
+        let a_1 = self.accel_to_hz(self.read_register(Registers::A1).await.unwrap().data);
+        let d_1 = self.accel_to_hz(self.read_register(Registers::D1).await.unwrap().data);
+        let d_max = self.accel_to_hz(self.read_register(Registers::DMAX).await.unwrap().data);
+        let a_max = self.accel_to_hz(self.read_register(Registers::AMAX).await.unwrap().data);
+
+        let t_accel = (max_speed - v_start) / a_1;
+        let d_accel = (v1 * v1 - v_start * v_start) / (2.0 * a_1);
+        let t_decel = (max_speed - v_stop) / d_1;
+        let d_decel = (v1 * v1 - v_stop * v_stop) / (2.0 * d_1);
+        let d_a_max = (max_speed * max_speed - v1 * v1) / (2.0 * a_max);
+        let d_d_max = (max_speed * max_speed - v1 * v1) / (2.0 * d_max);
+        let t_a_max = (max_speed - v1) / a_max;
+        let t_d_max = (max_speed - v1) / d_max;
+        let d_const = distance - match phase {
+            MovePhase::Stopped => (d_accel + d_decel + d_a_max + d_d_max),
+            MovePhase::AStart => {
+                let d = d_accel - (speed * speed - v_start * v_start) / (2.0 * a_1);
+                (d + d_decel + d_d_max + d_a_max)
+            },
+            MovePhase::A2Max => {
+                let d = d_a_max - (speed * speed - v1 * v1) / (2.0 * a_max);
+                (d + d_decel + d_d_max)
+            },
+            MovePhase::VMax => (d_decel + d_d_max),
+        };
+        let t_const = d_const / max_speed;
+        let t_total = t_const + match phase {
+            MovePhase::Stopped => t_accel + t_decel + t_a_max + t_d_max,
+            MovePhase::AStart => {
+                let t = (speed - v_start) / a_1;
+                t + t_decel + t_a_max + t_d_max
+            },
+            MovePhase::A2Max => {
+                let t = (speed - v1) / a_max;
+                t + t_decel + t_d_max
+            },
+            MovePhase::VMax => t_decel + t_d_max,
+        };
+        let micros = t_total * 1000000.0;
+        // This is also a slight underestimate, because the motor doesn't ACTUALLY
+        // accelerate from 0 to V_START in 0 time, but it's good enough,
+        // and we WANT to underestimate rather than overestimate.
+        Duration::from_micros(micros as u64)
+    }
 }
 
+#[repr(u8)]
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum MovePhase {
+    Stopped,
+    AStart,
+    A2Max,
+    VMax,
+}
