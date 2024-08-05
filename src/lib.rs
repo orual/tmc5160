@@ -688,6 +688,7 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
             // Similarly, we ignore the possibility of the motor being in the deceleration phase, because
             // it's hard to know for sure, and this case here covers it for 99% of all scenarios.
             let millis = max_speed * 1000.0 * distance;
+            log::info!("Estimated time to finish: {} ms", millis);
             return Ok(Duration::from_millis(millis as u64));
         }
         let v1 = self.read_register(Registers::V1).await?.data;
@@ -755,6 +756,7 @@ impl<SPIDEV, E> Tmc5160<SPIDEV>
         // This is also a slight underestimate, because the motor doesn't ACTUALLY
         // accelerate from 0 to V_START in 0 time, but it's good enough,
         // and we WANT to underestimate rather than overestimate.
+        log::info!("Estimated time to finish: {} microsseconds", micros);
         Ok(Duration::from_micros(micros as u64))
     }
 }

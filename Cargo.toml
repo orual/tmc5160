@@ -23,6 +23,7 @@ embedded-hal-async = { version = "1.0" }
 fixed = {version = "1.10.0", features = ["serde", "az"] }
 embassy-futures = { version = "0.1" }
 embassy-time = { version = "0.3.1", git = "https://github.com/embassy-rs/embassy", default-features = false }
+log = "0.4"
 
 [profile.dev]
 incremental = false
